@@ -408,12 +408,57 @@ h1{margin:0 0 4px;font-size:31px}.sub{color:#64817f;margin-bottom:14px}
 .radar-grid,
 .radar-ring,
 .radar-core{display:none!important}
+
+/* V40 地址搜尋 */
+.address-search{
+  display:flex;
+  gap:6px;
+  flex:1 1 360px;
+  min-width:260px;
+}
+.address-search input{
+  flex:1 1 auto;
+  min-width:0;
+  height:38px;
+  border:1px solid #b7c7d6;
+  border-radius:10px;
+  padding:0 12px;
+  font-size:16px;
+  background:rgba(255,255,255,.96);
+  color:#16324a;
+  outline:none;
+}
+.address-search input:focus{
+  border-color:#1976d2;
+  box-shadow:0 0 0 2px rgba(25,118,210,.14);
+}
+.address-search button{
+  white-space:nowrap;
+}
+@media (max-width:700px){
+  .toolbar .address-search{
+    display:flex!important;
+    order:-2;
+    flex:1 0 100%;
+    width:100%;
+    min-width:0;
+  }
+  .toolbar .address-search input{
+    display:block!important;
+    width:auto;
+    min-width:0;
+  }
+  .toolbar #addressSearch{
+    display:inline-block!important;
+  }
+}
+
 </style>
 </head>
 <body>
 <div class="wrap">
 <h1>💧 附近飲水機 LBS</h1>
-<div class="sub">V39｜搜尋大圓＋水波＋旋轉雷達 Scan</div>
+<div class="sub">V40｜地址搜尋＋搜尋大圓＋水波＋旋轉雷達 Scan</div>
 
 <div class="status">
  <span id="sLeaflet" class="badge wait">Leaflet 🟡</span>
@@ -426,6 +471,12 @@ h1{margin:0 0 4px;font-size:31px}.sub{color:#64817f;margin-bottom:14px}
 
 <div class="toolbar">
  <div id="info" class="info">拖曳藍色定位點或點地圖更換搜尋中心，再按「搜尋飲水點」。</div>
+ <div class="address-search">
+   <input id="addressInput" type="search" inputmode="search"
+          placeholder="輸入地址，例如：桃園市龜山區文化一路"
+          autocomplete="street-address" aria-label="地址搜尋">
+   <button id="addressSearch" type="button">找地址</button>
+ </div>
  <select id="radius">
    <option value="500">500 公尺</option>
    <option value="1000">1 公里</option>
@@ -443,7 +494,7 @@ h1{margin:0 0 4px;font-size:31px}.sub{color:#64817f;margin-bottom:14px}
  <aside class="panel"><h2>附近飲水點</h2><div class="water-legend"><span>📦 本地：原 Marker</span><span>🌐 線上新增：綠色虛線圈＋NEW</span></div><div class="water-legend"><span>💧 一般飲水</span><span>🔴 hot_water=yes 熱水</span><span>🔴 warm_water=yes 溫水</span><span>🟠 iced_warm=yes 冰溫</span></div><div class="mobile-list-hint">📱 點選下方飲水點後，會自動回到地圖並顯示該 Marker。</div><div id="results">尚未搜尋。</div></aside>
 </div>
 <div class="hint">V27：手機/WebView 進入後以地圖為主畫面，狀態與搜尋控制改為精簡浮動面板，減少畫面割裂。</div>
-<div id="debug" class="debug">V29 Mobile Clean Map 啟動中…</div>
+<div id="debug" class="debug">V40 Address Search 啟動中…</div>
 </div>
 
 <script>
@@ -451,7 +502,7 @@ h1{margin:0 0 4px;font-size:31px}.sub{color:#64817f;margin-bottom:14px}
 "use strict";
 const $=id=>document.getElementById(id);
 const debug=$("debug");
-function log(s){debug.textContent+="\n"+s;debug.scrollTop=debug.scrollHeight;console.log("[V28]",s)}
+function log(s){debug.textContent+="\n"+s;debug.scrollTop=debug.scrollHeight;console.log("[V40]",s)}
 function state(id,cls,text){const e=$(id);e.className="badge "+(cls||"");e.textContent=text}
 function errText(e){return e?.message || String(e?.reason || e || "未知錯誤")}
 
@@ -581,6 +632,55 @@ function setQueryMeta(lat,lon,radius,server,count){
  meta.innerHTML=`<b>本次搜尋</b><br>中心：${lat.toFixed(6)}, ${lon.toFixed(6)}<br>半徑：${radius>=1000?(radius/1000)+" km":radius+" m"}<br>Server：${server}<br>回傳：${count} 筆`;
  $("results").prepend(meta);
 }
+
+// ===== V40: 地址 → 經緯度搜尋 =====
+// 使用 OpenStreetMap Nominatim Search API。只有使用者按「找地址」時才送出請求。
+async function searchAddress(){
+ const input=$("addressInput");
+ const btn=$("addressSearch");
+ const q=(input?.value||"").trim();
+ if(!q){
+   $("info").textContent="請先輸入地址。";
+   input?.focus();
+   return;
+ }
+ btn.disabled=true;
+ const oldText=btn.textContent;
+ btn.textContent="搜尋中…";
+ $("info").textContent=`🔎 正在找地址：${q}`;
+ try{
+   const url="https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=tw&q="+encodeURIComponent(q);
+   const res=await fetch(url,{headers:{"Accept":"application/json","Accept-Language":"zh-TW,zh;q=0.9"}});
+   if(!res.ok)throw new Error(`HTTP ${res.status}`);
+   const data=await res.json();
+   if(!Array.isArray(data)||!data.length){
+     $("info").textContent=`找不到地址：${q}。可加入縣市、區、路名再試一次。`;
+     return;
+   }
+   const hit=data[0];
+   const lat=Number(hit.lat),lon=Number(hit.lon);
+   if(!Number.isFinite(lat)||!Number.isFinite(lon))throw new Error("地址座標格式錯誤");
+   markResultsStale();
+   setSearchPoint(lat,lon,true,"地址搜尋");
+   map.setView([lat,lon],16,{animate:true});
+   $("info").textContent=`📍 ${hit.display_name||q}｜已設為搜尋中心，按「搜尋飲水點」即可搜尋。`;
+   log(`V40 地址搜尋：${q} → ${lat.toFixed(6)},${lon.toFixed(6)}`);
+ }catch(e){
+   $("info").textContent=`地址搜尋失敗：${errText(e)}`;
+   log("V40 地址搜尋失敗："+errText(e));
+ }finally{
+   btn.disabled=false;
+   btn.textContent=oldText;
+ }
+}
+$("addressSearch").onclick=searchAddress;
+$("addressInput").addEventListener("keydown",e=>{
+ if(e.key==="Enter"){
+   e.preventDefault();
+   searchAddress();
+ }
+});
+
 function setSearchPoint(lat,lon,pan=false,source="手動"){
  if(!searchMarker){
    searchMarker=L.marker([lat,lon],{icon:searchIcon,draggable:true,zIndexOffset:1000}).addTo(map);
@@ -982,10 +1082,10 @@ setTimeout(()=>map.invalidateSize(true),100);
 // 無快取：維持原本 GPS → 2km Hybrid 自動搜尋。
 const v39Cached=v39LoadState();
 if(v39Cached && v39RestoreState(v39Cached)){
-  log("V39 啟動：已從 localStorage 恢復，略過自動 Scan。");
+  log("V40 啟動：已從 localStorage 恢復，略過自動 Scan。");
 }else{
   setTimeout(()=>{
-    log("V39 啟動：沒有新鮮快取，自動定位 → 搜尋 2 公里。");
+    log("V40 啟動：沒有新鮮快取，自動定位 → 搜尋 2 公里。");
     requestGpsAndSearch(true);
   },350);
 }
