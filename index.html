@@ -521,7 +521,7 @@ h1{margin:0 0 4px;font-size:31px}.sub{color:#64817f;margin-bottom:14px}
 <body>
 <div class="wrap">
 <h1>💧 附近飲水機 LBS</h1>
-<div class="sub">V41.1｜地址候選搜尋 Hotfix＋搜尋大圓＋水波＋旋轉雷達 Scan</div>
+<div class="sub">V41.2｜地址候選單行版＋搜尋大圓＋水波＋旋轉雷達 Scan</div>
 
 <div class="status">
  <span id="sLeaflet" class="badge wait">Leaflet 🟡</span>
@@ -752,7 +752,7 @@ function v41RenderAddressSuggestions(items,q){
    const b=document.createElement("button");
    b.type="button";
    b.className="address-candidate";
-   b.innerHTML=`<span class="pin">📍</span><span><div class="candidate-main">${escapeHtml(hit.display_name||"未命名地址")}</div><div class="candidate-meta">候選 ${idx+1}${v41AddressTypeLabel(hit) ? " · "+escapeHtml(v41AddressTypeLabel(hit)) : ""}</div></span>`;
+   b.innerHTML=`<span class="pin">📍</span><span><div class="candidate-main">${escapeHtml(hit.display_name||"未命名地址")}</div></span>`;
    b.onclick=()=>v41ChooseAddress(hit);
    box.appendChild(b);
  });
