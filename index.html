@@ -409,7 +409,7 @@ h1{margin:0 0 4px;font-size:31px}.sub{color:#64817f;margin-bottom:14px}
 .radar-ring,
 .radar-core{display:none!important}
 
-/* V40 地址搜尋 */
+/* V41 地址搜尋 */
 .address-search{
   display:flex;
   gap:6px;
@@ -453,12 +453,75 @@ h1{margin:0 0 4px;font-size:31px}.sub{color:#64817f;margin-bottom:14px}
   }
 }
 
+
+/* V41 地址候選清單 */
+.address-suggestions{
+  position:absolute;
+  z-index:1200;
+  top:calc(100% + 6px);
+  left:8px;
+  right:8px;
+  max-height:min(48vh,360px);
+  overflow:auto;
+  background:rgba(255,255,255,.98);
+  border:1px solid #c7d4df;
+  border-radius:12px;
+  box-shadow:0 8px 28px rgba(0,0,0,.18);
+  padding:5px;
+}
+.address-suggestions[hidden]{display:none!important}
+.address-candidate{
+  width:100%;
+  display:flex;
+  gap:9px;
+  align-items:flex-start;
+  text-align:left;
+  border:0;
+  border-bottom:1px solid #edf1f4;
+  background:transparent;
+  color:#16324a;
+  padding:10px 9px;
+  border-radius:8px;
+  cursor:pointer;
+}
+.address-candidate:last-child{border-bottom:0}
+.address-candidate:hover,.address-candidate:focus{
+  background:#eef6ff;
+  outline:none;
+}
+.address-candidate .pin{font-size:18px;line-height:1.25}
+.address-candidate .candidate-main{
+  font-size:14px;
+  line-height:1.35;
+  font-weight:650;
+}
+.address-candidate .candidate-meta{
+  margin-top:3px;
+  font-size:12px;
+  line-height:1.3;
+  color:#667785;
+}
+.address-empty{
+  padding:12px;
+  font-size:14px;
+  color:#586a78;
+}
+.toolbar{position:relative}
+@media (max-width:700px){
+  .address-suggestions{
+    top:48px;
+    left:6px;
+    right:6px;
+    max-height:42vh;
+  }
+}
+
 </style>
 </head>
 <body>
 <div class="wrap">
 <h1>💧 附近飲水機 LBS</h1>
-<div class="sub">V40｜地址搜尋＋搜尋大圓＋水波＋旋轉雷達 Scan</div>
+<div class="sub">V41.1｜地址候選搜尋 Hotfix＋搜尋大圓＋水波＋旋轉雷達 Scan</div>
 
 <div class="status">
  <span id="sLeaflet" class="badge wait">Leaflet 🟡</span>
@@ -477,6 +540,7 @@ h1{margin:0 0 4px;font-size:31px}.sub{color:#64817f;margin-bottom:14px}
           autocomplete="street-address" aria-label="地址搜尋">
    <button id="addressSearch" type="button">找地址</button>
  </div>
+ <div id="addressSuggestions" class="address-suggestions" hidden></div>
  <select id="radius">
    <option value="500">500 公尺</option>
    <option value="1000">1 公里</option>
@@ -494,7 +558,7 @@ h1{margin:0 0 4px;font-size:31px}.sub{color:#64817f;margin-bottom:14px}
  <aside class="panel"><h2>附近飲水點</h2><div class="water-legend"><span>📦 本地：原 Marker</span><span>🌐 線上新增：綠色虛線圈＋NEW</span></div><div class="water-legend"><span>💧 一般飲水</span><span>🔴 hot_water=yes 熱水</span><span>🔴 warm_water=yes 溫水</span><span>🟠 iced_warm=yes 冰溫</span></div><div class="mobile-list-hint">📱 點選下方飲水點後，會自動回到地圖並顯示該 Marker。</div><div id="results">尚未搜尋。</div></aside>
 </div>
 <div class="hint">V27：手機/WebView 進入後以地圖為主畫面，狀態與搜尋控制改為精簡浮動面板，減少畫面割裂。</div>
-<div id="debug" class="debug">V40 Address Search 啟動中…</div>
+<div id="debug" class="debug">V41 Address Candidate Search 啟動中…</div>
 </div>
 
 <script>
@@ -633,51 +697,135 @@ function setQueryMeta(lat,lon,radius,server,count){
  $("results").prepend(meta);
 }
 
-// ===== V40: 地址 → 經緯度搜尋 =====
-// 使用 OpenStreetMap Nominatim Search API。只有使用者按「找地址」時才送出請求。
+// ===== V41.1 Hotfix: 地址候選文字安全輸出 =====
+function escapeHtml(value){
+ return String(value ?? "").replace(/[&<>"']/g, ch => ({
+   "&":"&amp;",
+   "<":"&lt;",
+   ">":"&gt;",
+   '"':"&quot;",
+   "'":"&#39;"
+ })[ch]);
+}
+
+// ===== V41: 地址搜尋 + 候選比對 =====
+let v41AddressTimer=null;
+let v41AddressAbort=null;
+let v41AddressSeq=0;
+
+function v41HideAddressSuggestions(){
+ const box=$("addressSuggestions");
+ if(box){ box.hidden=true; box.innerHTML=""; }
+}
+
+function v41AddressTypeLabel(hit){
+ const parts=[];
+ if(hit.type) parts.push(hit.type);
+ if(hit.category && hit.category!==hit.type) parts.push(hit.category);
+ return parts.join(" · ");
+}
+
+function v41ChooseAddress(hit){
+ const lat=Number(hit.lat),lon=Number(hit.lon);
+ if(!Number.isFinite(lat)||!Number.isFinite(lon))return;
+ $("addressInput").value=hit.display_name||"";
+ v41HideAddressSuggestions();
+ markResultsStale();
+ setSearchPoint(lat,lon,true,"地址候選");
+ map.setView([lat,lon],16,{animate:true});
+ $("info").textContent=`📍 已選擇：${hit.display_name||$("addressInput").value}｜按「搜尋飲水點」搜尋附近飲水點。`;
+ log(`V41 選擇地址 → ${lat.toFixed(6)},${lon.toFixed(6)}｜${hit.display_name||""}`);
+}
+
+function v41RenderAddressSuggestions(items,q){
+ const box=$("addressSuggestions");
+ box.innerHTML="";
+ if(!items.length){
+   const d=document.createElement("div");
+   d.className="address-empty";
+   d.textContent=`找不到「${q}」的地址。可加入縣市、區、路名或門牌再試。`;
+   box.appendChild(d);
+   box.hidden=false;
+   return;
+ }
+ items.forEach((hit,idx)=>{
+   const b=document.createElement("button");
+   b.type="button";
+   b.className="address-candidate";
+   b.innerHTML=`<span class="pin">📍</span><span><div class="candidate-main">${escapeHtml(hit.display_name||"未命名地址")}</div><div class="candidate-meta">候選 ${idx+1}${v41AddressTypeLabel(hit) ? " · "+escapeHtml(v41AddressTypeLabel(hit)) : ""}</div></span>`;
+   b.onclick=()=>v41ChooseAddress(hit);
+   box.appendChild(b);
+ });
+ box.hidden=false;
+}
+
+async function v41FetchAddressCandidates(q,fromTyping=false){
+ q=(q||"").trim();
+ if(q.length<2){
+   v41HideAddressSuggestions();
+   return [];
+ }
+ if(v41AddressAbort) v41AddressAbort.abort();
+ v41AddressAbort=new AbortController();
+ const mySeq=++v41AddressSeq;
+ try{
+   if(!fromTyping) $("info").textContent=`🔎 正在比對地址：${q}`;
+   const url="https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&countrycodes=tw&q="+encodeURIComponent(q);
+   const res=await fetch(url,{
+     signal:v41AddressAbort.signal,
+     headers:{"Accept":"application/json","Accept-Language":"zh-TW,zh;q=0.9"}
+   });
+   if(!res.ok)throw new Error(`HTTP ${res.status}`);
+   const data=await res.json();
+   if(mySeq!==v41AddressSeq)return [];
+   const items=Array.isArray(data)?data:[];
+   v41RenderAddressSuggestions(items,q);
+   if(!fromTyping){
+     $("info").textContent=items.length
+       ? `🔎 找到 ${items.length} 個可能地址，請從清單選一個。`
+       : `找不到地址：${q}`;
+   }
+   return items;
+ }catch(e){
+   if(e && e.name==="AbortError")return [];
+   if(mySeq===v41AddressSeq){
+     $("info").textContent=`地址搜尋失敗：${errText(e)}`;
+     log("V41 地址搜尋失敗："+errText(e));
+   }
+   return [];
+ }
+}
+
 async function searchAddress(){
  const input=$("addressInput");
  const btn=$("addressSearch");
  const q=(input?.value||"").trim();
- if(!q){
-   $("info").textContent="請先輸入地址。";
-   input?.focus();
-   return;
- }
+ if(!q){ $("info").textContent="請先輸入地址。"; input?.focus(); return; }
  btn.disabled=true;
  const oldText=btn.textContent;
- btn.textContent="搜尋中…";
- $("info").textContent=`🔎 正在找地址：${q}`;
+ btn.textContent="比對中…";
  try{
-   const url="https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=tw&q="+encodeURIComponent(q);
-   const res=await fetch(url,{headers:{"Accept":"application/json","Accept-Language":"zh-TW,zh;q=0.9"}});
-   if(!res.ok)throw new Error(`HTTP ${res.status}`);
-   const data=await res.json();
-   if(!Array.isArray(data)||!data.length){
-     $("info").textContent=`找不到地址：${q}。可加入縣市、區、路名再試一次。`;
-     return;
-   }
-   const hit=data[0];
-   const lat=Number(hit.lat),lon=Number(hit.lon);
-   if(!Number.isFinite(lat)||!Number.isFinite(lon))throw new Error("地址座標格式錯誤");
-   markResultsStale();
-   setSearchPoint(lat,lon,true,"地址搜尋");
-   map.setView([lat,lon],16,{animate:true});
-   $("info").textContent=`📍 ${hit.display_name||q}｜已設為搜尋中心，按「搜尋飲水點」即可搜尋。`;
-   log(`V40 地址搜尋：${q} → ${lat.toFixed(6)},${lon.toFixed(6)}`);
- }catch(e){
-   $("info").textContent=`地址搜尋失敗：${errText(e)}`;
-   log("V40 地址搜尋失敗："+errText(e));
+   await v41FetchAddressCandidates(q,false);
  }finally{
    btn.disabled=false;
    btn.textContent=oldText;
  }
 }
+
 $("addressSearch").onclick=searchAddress;
+$("addressInput").addEventListener("input",e=>{
+ clearTimeout(v41AddressTimer);
+ const q=e.target.value.trim();
+ if(q.length<2){ v41HideAddressSuggestions(); return; }
+ v41AddressTimer=setTimeout(()=>v41FetchAddressCandidates(q,true),650);
+});
 $("addressInput").addEventListener("keydown",e=>{
- if(e.key==="Enter"){
-   e.preventDefault();
-   searchAddress();
+ if(e.key==="Enter"){ e.preventDefault(); searchAddress(); }
+ if(e.key==="Escape")v41HideAddressSuggestions();
+});
+document.addEventListener("click",e=>{
+ if(!e.target.closest(".address-search") && !e.target.closest("#addressSuggestions")){
+   v41HideAddressSuggestions();
  }
 });
 
