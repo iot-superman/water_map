@@ -400,7 +400,7 @@ h1{margin:0 0 4px;font-size:31px}.sub{color:#64817f;margin-bottom:14px}
   display:none!important;
 }
 
-/* V38: keep water-wave pulse + rotating radar scan; hide only fixed concentric rings/grid */
+/* V39: keep water-wave pulse + rotating radar scan; hide only fixed concentric rings/grid */
 .radar-wrap{display:block!important;position:relative!important}
 .radar-pulse,
 .radar-sweep,
@@ -413,7 +413,7 @@ h1{margin:0 0 4px;font-size:31px}.sub{color:#64817f;margin-bottom:14px}
 <body>
 <div class="wrap">
 <h1>💧 附近飲水機 LBS</h1>
-<div class="sub">V38｜搜尋大圓＋水波＋旋轉雷達 Scan</div>
+<div class="sub">V39｜搜尋大圓＋水波＋旋轉雷達 Scan</div>
 
 <div class="status">
  <span id="sLeaflet" class="badge wait">Leaflet 🟡</span>
@@ -678,6 +678,90 @@ async function fetchOverpass(url,q){
  }
 }
 
+
+// ===== V39: persistent search state =====
+// 目的：WebView / WKWebView 若被重新建立，5 分鐘內先恢復上一批飲水點，
+// 不重新 GPS / Overpass Scan。使用者仍可按「搜尋飲水點」手動刷新。
+const V39_CACHE_KEY="water_map_v39_search_state";
+const V39_CACHE_MAX_AGE_MS=5*60*1000;
+let v39LastRenderedPlaces=[];
+
+function v39SerializablePlaces(places){
+ return (places||[]).map(p=>({
+   id:p.id,lat:p.lat,lon:p.lon,tags:p.tags||{},source:p.source||"local"
+ }));
+}
+
+function v39SaveState(lat,lon,places){
+ try{
+   const center=map.getCenter();
+   const payload={
+     version:39,
+     savedAt:Date.now(),
+     searchLat:lat,
+     searchLon:lon,
+     radius:Number($("radius").value)||2000,
+     mapLat:center.lat,
+     mapLon:center.lng,
+     zoom:map.getZoom(),
+     places:v39SerializablePlaces(places)
+   };
+   localStorage.setItem(V39_CACHE_KEY,JSON.stringify(payload));
+   log(`V39 狀態已保存：${payload.places.length} 點`);
+ }catch(e){
+   log("V39 保存失敗："+errText(e));
+ }
+}
+
+function v39LoadState(){
+ try{
+   const raw=localStorage.getItem(V39_CACHE_KEY);
+   if(!raw)return null;
+   const data=JSON.parse(raw);
+   if(!data || data.version!==39 || !Number.isFinite(data.savedAt))return null;
+   const age=Date.now()-data.savedAt;
+   if(age<0 || age>V39_CACHE_MAX_AGE_MS){
+     localStorage.removeItem(V39_CACHE_KEY);
+     return null;
+   }
+   if(!Number.isFinite(data.searchLat)||!Number.isFinite(data.searchLon))return null;
+   return data;
+ }catch(e){
+   try{localStorage.removeItem(V39_CACHE_KEY)}catch(_){}
+   return null;
+ }
+}
+
+function v39RestoreState(data){
+ try{
+   $("radius").value=String(data.radius||2000);
+   setSearchPoint(data.searchLat,data.searchLon,false,"V39 快取恢復");
+   const restored=(data.places||[]).map((p,idx)=>({
+     id:p.id||("cache/"+idx),
+     lat:Number(p.lat),
+     lon:Number(p.lon),
+     tags:p.tags||{},
+     source:p.source||"local"
+   })).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
+
+   render(restored,data.searchLat,data.searchLon,false);
+   if(Number.isFinite(data.mapLat)&&Number.isFinite(data.mapLon)&&Number.isFinite(data.zoom)){
+     map.setView([data.mapLat,data.mapLon],data.zoom,{animate:false});
+   }
+   state("sGps","ok","GPS 🟢 已恢復");
+   state("sLocal","ok",`快取 🟢 ${restored.length}點`);
+   state("sOnline","","線上補充 ⚪ 未重查");
+   state("sOverpass","","Overpass ⚪ 未重查");
+   $("info").textContent=`♻️ 已恢復上次 ${restored.length} 個飲水點｜5 分鐘內不重新 Scan`;
+   log(`V39 快取恢復成功：${restored.length} 點；略過啟動 GPS/Overpass Scan。`);
+   setTimeout(()=>map.invalidateSize(true),100);
+   return true;
+ }catch(e){
+   log("V39 恢復失敗："+errText(e));
+   return false;
+ }
+}
+
 async function searchAt(lat,lon){
  if(searching){
    currentController?.abort();
@@ -820,7 +904,7 @@ function fitSearchResults(lat,lon,places){
  setTimeout(()=>map.invalidateSize(true),80);
 }
 
-function render(elements,lat,lon){
+function render(elements,lat,lon,persistState=true){
  const unique=new Map();
  for(const e of elements){
    const pLat=e.lat ?? e.center?.lat,pLon=e.lon ?? e.center?.lon;
@@ -883,7 +967,9 @@ function render(elements,lat,lon){
    $("results").appendChild(b);
  });
  log("顯示飲水點："+places.length);
+ v39LastRenderedPlaces=places;
  fitSearchResults(lat,lon,places);
+ if(persistState)v39SaveState(lat,lon,places);
 }
 
 loadLocalCSV();
@@ -891,12 +977,31 @@ const c=map.getCenter();
 setSearchPoint(c.lat,c.lng,false,"預設中心");
 setTimeout(()=>map.invalidateSize(true),100);
 
-// V33: startup is triggered from the app's own initialization flow.
-// This runs after map, controls, embedded data and searchAt() are all ready.
-setTimeout(()=>{
-  log("V38 啟動：自動定位 → 搜尋 2 公里；保留搜尋大圓、水波與旋轉雷達 Scan，僅移除固定同心圓。");
-  requestGpsAndSearch(true);
-},350);
+// V39：先檢查 5 分鐘內的搜尋快取。
+// 有快取：直接恢復 Marker / 搜尋中心 / Zoom，不重新 Scan。
+// 無快取：維持原本 GPS → 2km Hybrid 自動搜尋。
+const v39Cached=v39LoadState();
+if(v39Cached && v39RestoreState(v39Cached)){
+  log("V39 啟動：已從 localStorage 恢復，略過自動 Scan。");
+}else{
+  setTimeout(()=>{
+    log("V39 啟動：沒有新鮮快取，自動定位 → 搜尋 2 公里。");
+    requestGpsAndSearch(true);
+  },350);
+}
+
+// 地圖移動/縮放後，把 viewport 一併更新到既有快取；不觸發搜尋。
+let v39MoveSaveTimer=null;
+map.on("moveend zoomend",()=>{
+ clearTimeout(v39MoveSaveTimer);
+ v39MoveSaveTimer=setTimeout(()=>{
+   if(v39LastRenderedPlaces.length && searchMarker){
+     const sp=searchMarker.getLatLng();
+     v39SaveState(sp.lat,sp.lng,v39LastRenderedPlaces);
+   }
+ },180);
+});
+
 })();
 
 </script>
